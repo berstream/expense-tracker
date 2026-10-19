@@ -768,7 +768,7 @@ async function handleReceiptUpload(e){
     document.getElementById('ocrBadge').textContent = `✓ อ่านจากสลิป (ความมั่นใจ ${confPct}%) — ตรวจสอบก่อนบันทึก`;
   }catch(err){
     console.error(err);
-    showToast('อ่านสลิปไม่สำเร็จ กรอกข้อมูลเองได้เลย');
+    showToast('อ่านสลิปไม่สำเร็จ: ' + (err.message || JSON.stringify(err)));
     document.getElementById('receiptUploadText').textContent = '📷 ลองอัปโหลดใหม่';
   }
 }
