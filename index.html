@@ -45,6 +45,8 @@
   .dot.income{background:#4ade80;} .dot.expense{background:#fca5a5;}
 
   main{padding:14px; max-width:560px; margin:0 auto;}
+  @font-face{font-family:'TH Sarabun New'; src:url('fonts/THSarabunNew.woff') format('woff'); font-weight:400; font-display:swap;}
+  @font-face{font-family:'TH Sarabun New'; src:url('fonts/THSarabunNew-Bold.woff') format('woff'); font-weight:700; font-display:swap;}
   .card{background:var(--card); border-radius:var(--radius); padding:16px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid var(--border);}
   .card h2{font-size:14px; font-weight:600; margin-bottom:10px; color:var(--text-dim);}
 
@@ -228,8 +230,15 @@
       </div>
     </div>
     <div class="card">
-      <h2>ข้อมูล</h2>
-      <button class="btn btn-outline" onclick="exportCSV()">⬇ Export CSV</button>
+      <h2>Export ข้อมูล</h2>
+      <div class="btn-row" style="margin-top:0; margin-bottom:10px;">
+        <div class="field" style="flex:1; margin-bottom:0;"><label>ตั้งแต่วันที่</label><input type="date" id="exportFrom"></div>
+        <div class="field" style="flex:1; margin-bottom:0;"><label>ถึงวันที่</label><input type="date" id="exportTo"></div>
+      </div>
+      <div id="exportInfo" style="font-size:12px; color:var(--text-dim); margin-bottom:10px;"></div>
+      <button class="btn btn-primary" id="btnExportXlsx" onclick="exportXLSX()">⬇ Excel (.xlsx) พร้อมรูปสลิป</button>
+      <button class="btn btn-outline" id="btnExportPdf" style="margin-top:8px" onclick="exportPDF()">⬇ PDF พร้อมรูปสลิป</button>
+      <button class="btn btn-outline" id="btnExportCsv" style="margin-top:8px" onclick="exportCSV()">⬇ CSV (ไม่มีรูป ทุกรายการ)</button>
     </div>
   </section>
 
@@ -578,6 +587,7 @@ function renderCategoryLists(){
 function renderSettingsUI(){
   document.getElementById('currencySelect').value = state.settings.currency || 'THB';
   document.getElementById('startOfMonthSelect').value = state.settings.start_of_month || '1';
+  initExportRange();
 }
 
 /* ============ TRANSACTION SHEET ============ */
@@ -925,6 +935,308 @@ function exportCSV(){
   a.download = `expense-tracker-${todayStr()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+
+/* ============ EXPORT: Excel / PDF พร้อมรูปสลิป ============ */
+const EXPORT_FONT = 'TH Sarabun New';
+const _scriptCache = {};
+function loadScript(src){
+  if (_scriptCache[src]) return _scriptCache[src];
+  _scriptCache[src] = new Promise((resolve, reject)=>{
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => { delete _scriptCache[src]; reject(new Error('โหลดไลบรารีไม่สำเร็จ (ต้องต่อเน็ต)')); };
+    document.head.appendChild(el);
+  });
+  return _scriptCache[src];
+}
+function pad2(n){ return String(n).padStart(2,'0'); }
+function dateToThai(str){ // 'YYYY-MM-DD' -> 'DD/MM/BBBB' (พ.ศ.)
+  const [y,m,d] = String(str).split('-');
+  return `${d}/${m}/${parseInt(y,10)+543}`;
+}
+function escHtml(v){
+  return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+let _exportInit = false;
+function initExportRange(){
+  const f = document.getElementById('exportFrom'), t = document.getElementById('exportTo');
+  if (!f.value || !t.value){
+    const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
+    const last = new Date(y, m+1, 0).getDate();
+    f.value = `${y}-${pad2(m+1)}-01`;
+    t.value = `${y}-${pad2(m+1)}-${pad2(last)}`;
+  }
+  if (!_exportInit){
+    _exportInit = true;
+    f.addEventListener('change', updateExportInfo);
+    t.addEventListener('change', updateExportInfo);
+  }
+  updateExportInfo();
+}
+function getExportRows(){
+  const from = document.getElementById('exportFrom').value;
+  const to = document.getElementById('exportTo').value;
+  return state.transactions
+    .filter(t => (!from || t.date >= from) && (!to || t.date <= to))
+    .sort((a,b)=> a.date.localeCompare(b.date) || String(a.created_at||'').localeCompare(String(b.created_at||'')));
+}
+function updateExportInfo(){
+  const rows = getExportRows();
+  const withImg = rows.filter(r => r.receipt_url).length;
+  document.getElementById('exportInfo').textContent = `${rows.length} รายการ · มีรูปสลิป ${withImg} รูป`;
+}
+function setExportBusy(on, text){
+  ['btnExportXlsx','btnExportPdf','btnExportCsv'].forEach(id => document.getElementById(id).disabled = on);
+  const info = document.getElementById('exportInfo');
+  if (on) info.textContent = text || 'กำลังทำงาน...';
+  else updateExportInfo();
+}
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 60000);
+}
+async function fetchReceiptImages(rows, onProgress){
+  const urls = [...new Set(rows.map(r => r.receipt_url).filter(Boolean))];
+  const map = new Map();
+  let idx = 0, done = 0, failed = 0;
+  async function worker(){
+    while (idx < urls.length){
+      const u = urls[idx++];
+      try{
+        const res = await fetch(u);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        const bmp = await loadBitmap(blob);
+        map.set(u, { blob, w: bmp.width, h: bmp.height, objUrl: URL.createObjectURL(blob) });
+      }catch(e){ failed++; console.error('โหลดรูปไม่สำเร็จ', u, e); }
+      done++;
+      if (onProgress) onProgress(done, urls.length);
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(4, urls.length)}, worker));
+  return { map, failed };
+}
+function exportSummary(rows){
+  let inc = 0, exp = 0;
+  rows.forEach(t => { if (t.type === 'income') inc += t.amount; else exp += t.amount; });
+  return { inc, exp, net: inc - exp };
+}
+
+/* ---------- Excel ---------- */
+async function exportXLSX(){
+  const rows = getExportRows();
+  if (!rows.length){ showToast('ไม่มีรายการในช่วงวันที่นี้'); return; }
+  setExportBusy(true, 'กำลังโหลดตัวสร้างไฟล์...');
+  let imgs = { map: new Map(), failed: 0 };
+  try{
+    await loadScript('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
+    imgs = await fetchReceiptImages(rows, (d,n)=> setExportBusy(true, `กำลังโหลดรูปสลิป ${d}/${n}`));
+    setExportBusy(true, 'กำลังสร้างไฟล์ Excel...');
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'รายรับ-รายจ่าย';
+    const ws = wb.addWorksheet('รายการ', { views: [{ state:'frozen', ySplit:1 }] });
+    const baseFont = { name: EXPORT_FONT, size: 14 };
+    ws.columns = [
+      { header:'วันที่', width:13 },
+      { header:'ประเภท', width:10 },
+      { header:'หมวดหมู่', width:18 },
+      { header:'จำนวนเงิน (บาท)', width:16 },
+      { header:'หมายเหตุ', width:30 },
+      { header:'รูปสลิป', width:22 },
+      { header:'ลิงก์รูป', width:12 },
+    ];
+    const head = ws.getRow(1);
+    head.height = 26;
+    head.eachCell(c => {
+      c.font = { ...baseFont, bold:true, color:{argb:'FFFFFFFF'} };
+      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF0F766E'} };
+      c.alignment = { vertical:'middle', horizontal:'center' };
+    });
+
+    const BOX_W = 150, BOX_H = 125; // px ของรูปในช่อง
+    const pendingImgs = [];
+    rows.forEach((t, i) => {
+      const cat = categoryById(t.category_id);
+      const img = t.receipt_url ? imgs.map.get(t.receipt_url) : null;
+      const r = ws.addRow([
+        dateToThai(t.date),
+        t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+        cat?.name || '',
+        t.amount / 100,
+        t.note || '',
+        '',
+        t.receipt_url ? { text:'เปิดรูป', hyperlink: t.receipt_url } : '',
+      ]);
+      r.height = img ? 100 : 22;
+      r.eachCell({ includeEmpty:true }, (c, col) => {
+        c.font = { ...baseFont };
+        c.alignment = { vertical:'middle', horizontal: col === 4 ? 'right' : (col === 1 || col === 2 ? 'center' : 'left'), wrapText: col === 5 };
+        c.border = { bottom:{style:'hair', color:{argb:'FFCBD5E1'}} };
+      });
+      r.getCell(4).numFmt = '#,##0.00';
+      r.getCell(2).font = { ...baseFont, color:{argb: t.type === 'income' ? 'FF15803D' : 'FFDC2626'} };
+      if (t.receipt_url) r.getCell(7).font = { ...baseFont, color:{argb:'FF2563EB'}, underline:true };
+      if (img){
+        const s = Math.min(BOX_W / img.w, BOX_H / img.h);
+        const iw = Math.round(img.w * s), ih = Math.round(img.h * s);
+        pendingImgs.push({ img, iw, ih, rowIdx: i + 1 });
+      }
+    });
+    // วางรูปหลังสร้างแถวครบ (ต้องแปลง blob -> buffer แบบ async)
+    for (const { img, iw, ih, rowIdx } of pendingImgs){
+      const buffer = await img.blob.arrayBuffer();
+      const ext = (img.blob.type || '').includes('png') ? 'png' : 'jpeg';
+      const id = wb.addImage({ buffer, extension: ext });
+      ws.addImage(id, { tl:{ col: 5 + ((BOX_W + 9 - iw) / 2) / 159, row: rowIdx + 0.04 }, ext:{ width: iw, height: ih }, editAs:'oneCell' });
+    }
+
+    // แถวสรุปรวม
+    const sum = exportSummary(rows);
+    const first = 2, last = rows.length + 1;
+    ws.addRow([]);
+    const totals = [
+      ['รวมรายรับ', `SUMIF(B${first}:B${last},"รายรับ",D${first}:D${last})`, sum.inc / 100],
+      ['รวมรายจ่าย', `SUMIF(B${first}:B${last},"รายจ่าย",D${first}:D${last})`, sum.exp / 100],
+    ];
+    totals.forEach(([label, formula, result]) => {
+      const r = ws.addRow(['', '', label, { formula, result }]);
+      r.getCell(3).font = { ...baseFont, bold:true }; r.getCell(3).alignment = { horizontal:'right' };
+      r.getCell(4).font = { ...baseFont, bold:true }; r.getCell(4).numFmt = '#,##0.00';
+    });
+    const netRow = ws.addRow(['', '', 'คงเหลือ', { formula:`D${last+2}-D${last+3}`, result: sum.net / 100 }]);
+    netRow.getCell(3).font = { ...baseFont, bold:true }; netRow.getCell(3).alignment = { horizontal:'right' };
+    netRow.getCell(4).font = { ...baseFont, bold:true }; netRow.getCell(4).numFmt = '#,##0.00';
+
+    // ชีตสรุปตามหมวดหมู่
+    const ws2 = wb.addWorksheet('สรุปตามหมวด');
+    ws2.columns = [ {header:'หมวดหมู่', width:24}, {header:'ประเภท', width:12}, {header:'จำนวนรายการ', width:16}, {header:'รวม (บาท)', width:18} ];
+    ws2.getRow(1).eachCell(c => {
+      c.font = { ...baseFont, bold:true, color:{argb:'FFFFFFFF'} };
+      c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:'FF0F766E'} };
+      c.alignment = { horizontal:'center' };
+    });
+    const byCat = {};
+    rows.forEach(t => {
+      const key = t.type + '|' + (t.category_id || '');
+      const cat = categoryById(t.category_id);
+      byCat[key] = byCat[key] || { name: cat?.name || '(ไม่ระบุ)', type: t.type, n: 0, sum: 0 };
+      byCat[key].n++; byCat[key].sum += t.amount;
+    });
+    Object.values(byCat).sort((a,b)=> a.type.localeCompare(b.type) || b.sum - a.sum).forEach(c => {
+      const r = ws2.addRow([c.name, c.type === 'income' ? 'รายรับ' : 'รายจ่าย', c.n, c.sum / 100]);
+      r.eachCell(cell => { cell.font = { ...baseFont }; });
+      r.getCell(4).numFmt = '#,##0.00';
+    });
+
+    const buf = await wb.xlsx.writeBuffer();
+    const from = document.getElementById('exportFrom').value, to = document.getElementById('exportTo').value;
+    downloadBlob(new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `expense-${from}_to_${to}.xlsx`);
+    showToast(imgs.failed ? `Export แล้ว (โหลดรูปไม่ได้ ${imgs.failed} รูป)` : 'Export Excel แล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('Export Excel ไม่สำเร็จ: ' + (err.message || err));
+  }finally{
+    imgs.map.forEach(v => URL.revokeObjectURL(v.objUrl));
+    setExportBusy(false);
+  }
+}
+
+/* ---------- PDF (เรนเดอร์ทีละหน้าด้วยฟอนต์ TH Sarabun New แล้วใส่ลง PDF) ---------- */
+async function exportPDF(){
+  const rows = getExportRows();
+  if (!rows.length){ showToast('ไม่มีรายการในช่วงวันที่นี้'); return; }
+  setExportBusy(true, 'กำลังโหลดตัวสร้างไฟล์...');
+  let imgs = { map: new Map(), failed: 0 };
+  const stage = document.createElement('div');
+  stage.style.cssText = 'position:fixed; left:-10000px; top:0; z-index:-1;';
+  document.body.appendChild(stage);
+  try{
+    await Promise.all([
+      loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js'),
+      loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'),
+    ]);
+    await Promise.all([ document.fonts.load(`18px "${EXPORT_FONT}"`), document.fonts.load(`bold 18px "${EXPORT_FONT}"`) ]);
+    imgs = await fetchReceiptImages(rows, (d,n)=> setExportBusy(true, `กำลังโหลดรูปสลิป ${d}/${n}`));
+
+    const from = document.getElementById('exportFrom').value, to = document.getElementById('exportTo').value;
+    const sum = exportSummary(rows);
+    const PAGE_W = 794, PAGE_H = 1123, PAD = 40;
+    const IMG_ROW_H = 118, TXT_ROW_H = 36, HEAD_H = 34, TITLE_H = 130;
+
+    // แบ่งแถวเป็นหน้า (ประมาณความสูงต่อแถว)
+    const pages = [[]]; let used = TITLE_H + HEAD_H, limit = PAGE_H - PAD*2 - 30;
+    rows.forEach(t => {
+      const hasImg = t.receipt_url && imgs.map.has(t.receipt_url);
+      let h = hasImg ? IMG_ROW_H : TXT_ROW_H;
+      if (!hasImg && (t.note || '').length > 26) h += 22;
+      if (used + h > limit){ pages.push([]); used = HEAD_H; }
+      pages[pages.length-1].push(t); used += h;
+    });
+
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit:'mm', format:'a4', orientation:'portrait' });
+
+    for (let p = 0; p < pages.length; p++){
+      setExportBusy(true, `กำลังสร้างหน้า ${p+1}/${pages.length}`);
+      const rowsHtml = pages[p].map(t => {
+        const cat = categoryById(t.category_id);
+        const img = t.receipt_url ? imgs.map.get(t.receipt_url) : null;
+        const color = t.type === 'income' ? '#15803d' : '#dc2626';
+        return `<tr style="height:${img ? IMG_ROW_H : TXT_ROW_H}px;">
+          <td style="width:88px;">${dateToThai(t.date)}</td>
+          <td style="width:150px;">${escHtml(cat?.name || '')}<div style="font-size:14px; color:${color};">${t.type === 'income' ? 'รายรับ' : 'รายจ่าย'}</div></td>
+          <td>${escHtml(t.note || '')}</td>
+          <td style="width:104px; text-align:right; font-weight:700; color:${color};">${satangToDisplay(t.amount)}</td>
+          <td style="width:96px; text-align:center;">${img ? `<img src="${img.objUrl}" style="max-width:88px; max-height:104px;">` : ''}</td>
+        </tr>`;
+      }).join('');
+      const title = p === 0 ? `
+        <div style="height:${TITLE_H}px;">
+          <div style="font-size:30px; font-weight:700; color:#0f766e;">รายงานรายรับ-รายจ่าย</div>
+          <div style="font-size:18px; margin-top:2px;">ช่วงวันที่ ${dateToThai(from)} – ${dateToThai(to)} · ${rows.length} รายการ</div>
+          <div style="display:flex; gap:12px; margin-top:10px; font-size:18px;">
+            <div style="flex:1; background:#f0fdf4; border-radius:8px; padding:6px 10px;">รายรับ<br><b style="color:#15803d; font-size:22px;">฿${satangToDisplay(sum.inc)}</b></div>
+            <div style="flex:1; background:#fef2f2; border-radius:8px; padding:6px 10px;">รายจ่าย<br><b style="color:#dc2626; font-size:22px;">฿${satangToDisplay(sum.exp)}</b></div>
+            <div style="flex:1; background:#f1f5f9; border-radius:8px; padding:6px 10px;">คงเหลือ<br><b style="font-size:22px;">${sum.net < 0 ? '-' : ''}฿${satangToDisplay(Math.abs(sum.net))}</b></div>
+          </div>
+        </div>` : '';
+      stage.innerHTML = `
+        <div style="width:${PAGE_W}px; height:${PAGE_H}px; box-sizing:border-box; padding:${PAD}px; background:#fff; color:#0f172a; font-family:'${EXPORT_FONT}',sans-serif; font-size:18px; line-height:1.2; position:relative; overflow:hidden;">
+          ${title}
+          <table style="width:100%; border-collapse:collapse; table-layout:fixed;">
+            <thead><tr style="height:${HEAD_H}px; background:#0f766e; color:#fff;">
+              <th style="width:88px;">วันที่</th><th style="width:150px;">หมวดหมู่</th><th>หมายเหตุ</th><th style="width:104px; text-align:right;">จำนวนเงิน</th><th style="width:96px;">รูปสลิป</th>
+            </tr></thead>
+            <tbody style="vertical-align:middle;">${rowsHtml}</tbody>
+          </table>
+          <div style="position:absolute; bottom:18px; left:0; right:0; text-align:center; font-size:14px; color:#94a3b8;">หน้า ${p+1}/${pages.length}</div>
+        </div>`;
+      stage.querySelectorAll('td').forEach(td => { td.style.borderBottom = '1px solid #e2e8f0'; td.style.padding = '3px 6px'; });
+      stage.querySelectorAll('th').forEach(th => { th.style.padding = '3px 6px'; if (!th.style.textAlign && th.textContent !== 'รูปสลิป') th.style.textAlign = 'left'; });
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const canvas = await html2canvas(stage.firstElementChild, { scale:2, backgroundColor:'#ffffff', useCORS:true, logging:false });
+      if (p > 0) pdf.addPage();
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.88), 'JPEG', 0, 0, 210, 297);
+      canvas.width = canvas.height = 0;
+    }
+
+    pdf.save(`expense-${from}_to_${to}.pdf`);
+    showToast(imgs.failed ? `Export แล้ว (โหลดรูปไม่ได้ ${imgs.failed} รูป)` : 'Export PDF แล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('Export PDF ไม่สำเร็จ: ' + (err.message || err));
+  }finally{
+    stage.remove();
+    imgs.map.forEach(v => URL.revokeObjectURL(v.objUrl));
+    setExportBusy(false);
+  }
 }
 
 /* ============ PWA ============ */
