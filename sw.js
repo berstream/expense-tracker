@@ -1,5 +1,5 @@
 // Service Worker — cache app shell เพื่อให้เปิดแอพได้แม้เน็ตหลุด
-const CACHE_NAME = 'expense-tracker-v1';
+const CACHE_NAME = 'expense-tracker-v2';
 const APP_SHELL = [
   './',
   './index.html',
