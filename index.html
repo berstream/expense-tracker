@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>รายรับ-รายจ่าย</title>
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --primary:#0f766e; --primary-light:#14b8a6; --bg:#f8fafc; --card:#ffffff;
+    --text:#0f172a; --text-dim:#64748b; --border:#e2e8f0;
+    --income:#16a34a; --expense:#dc2626; --radius:14px;
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    font-family:'Noto Sans Thai','Noto Sans',sans-serif;
+    background:var(--bg); color:var(--text);
+    padding-bottom: calc(72px + var(--safe-bottom));
+    -webkit-tap-highlight-color: transparent;
+  }
+  .hidden{display:none !important;}
+  .app-header{
+    background:linear-gradient(135deg,var(--primary),var(--primary-light));
+    color:#fff; padding:20px 16px 28px; border-radius:0 0 20px 20px;
+  }
+  .app-header h1{font-size:15px; font-weight:500; opacity:.85;}
+  .month-nav{display:flex; align-items:center; justify-content:center; gap:14px; margin-top:4px;}
+  .month-nav button{background:rgba(255,255,255,.2); border:none; color:#fff; width:32px; height:32px; border-radius:50%; font-size:16px;}
+  .month-nav .month-label{font-size:18px; font-weight:600;}
+  .balance{text-align:center; margin-top:14px;}
+  .balance .amount{font-size:32px; font-weight:700;}
+  .balance .label{font-size:12px; opacity:.8;}
+  .io-row{display:flex; justify-content:center; gap:28px; margin-top:10px; font-size:13px;}
+  .io-row .io-item{display:flex; align-items:center; gap:6px;}
+  .dot{width:8px; height:8px; border-radius:50%;}
+  .dot.income{background:#4ade80;} .dot.expense{background:#fca5a5;}
+
+  main{padding:14px; max-width:560px; margin:0 auto;}
+  .card{background:var(--card); border-radius:var(--radius); padding:16px; margin-bottom:14px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid var(--border);}
+  .card h2{font-size:14px; font-weight:600; margin-bottom:10px; color:var(--text-dim);}
+
+  .skeleton{background:linear-gradient(90deg,#e2e8f0 25%,#f1f5f9 50%,#e2e8f0 75%); background-size:200% 100%; animation:shimmer 1.4s infinite; border-radius:8px;}
+  @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
+
+  .tx-item{display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border);}
+  .tx-item:last-child{border-bottom:none;}
+  .tx-icon{width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0;}
+  .tx-main{flex:1; min-width:0;}
+  .tx-cat{font-weight:500; font-size:14px;}
+  .tx-note{font-size:12px; color:var(--text-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .tx-amount{font-weight:600; font-size:14px; flex-shrink:0;}
+  .tx-amount.income{color:var(--income);} .tx-amount.expense{color:var(--expense);}
+  .tx-date-group{font-size:12px; color:var(--text-dim); font-weight:600; margin:14px 0 4px; text-transform:uppercase;}
+  .tx-date-group:first-child{margin-top:0;}
+  .empty-state{text-align:center; padding:40px 20px; color:var(--text-dim);}
+  .empty-state .emoji{font-size:40px; margin-bottom:10px;}
+
+  .chart-wrap{position:relative; height:220px;}
+  .cat-legend{display:flex; flex-wrap:wrap; gap:8px; margin-top:12px;}
+  .cat-legend-item{display:flex; align-items:center; gap:5px; font-size:12px; background:#f1f5f9; padding:4px 10px; border-radius:20px;}
+
+  nav.tabbar{
+    position:fixed; bottom:0; left:0; right:0; background:#fff; border-top:1px solid var(--border);
+    display:flex; padding-bottom: var(--safe-bottom); z-index:40;
+  }
+  nav.tabbar button{
+    flex:1; background:none; border:none; padding:10px 0 6px; display:flex; flex-direction:column;
+    align-items:center; gap:2px; font-size:10px; color:var(--text-dim); font-family:inherit;
+  }
+  nav.tabbar button .icon{font-size:20px;}
+  nav.tabbar button.active{color:var(--primary);}
+
+  .fab{
+    position:fixed; right:18px; bottom:calc(84px + var(--safe-bottom)); width:56px; height:56px; border-radius:50%;
+    background:var(--primary); color:#fff; border:none; font-size:26px; box-shadow:0 4px 12px rgba(15,118,110,.4); z-index:41;
+  }
+
+  .sheet-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:50; display:flex; align-items:flex-end;
+  }
+  .sheet{
+    background:#fff; width:100%; max-height:92vh; overflow-y:auto; border-radius:20px 20px 0 0;
+    padding:18px 16px calc(24px + var(--safe-bottom));
+  }
+  .sheet-handle{width:36px; height:4px; background:var(--border); border-radius:4px; margin:0 auto 14px;}
+  .sheet h3{font-size:17px; margin-bottom:16px;}
+
+  .type-toggle{display:flex; background:#f1f5f9; border-radius:10px; padding:3px; margin-bottom:16px;}
+  .type-toggle button{flex:1; padding:9px; border:none; background:none; border-radius:8px; font-family:inherit; font-size:14px; font-weight:600; color:var(--text-dim);}
+  .type-toggle button.active{background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.08);}
+  .type-toggle button.active.income{color:var(--income);} .type-toggle button.active.expense{color:var(--expense);}
+
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; font-weight:500;}
+  .field input, .field select, .field textarea{
+    width:100%; padding:11px 12px; border:1px solid var(--border); border-radius:10px; font-size:15px;
+    font-family:inherit; background:#fff; color:var(--text);
+  }
+  .field input:focus, .field select:focus, .field textarea:focus{outline:none; border-color:var(--primary);}
+  .amount-input{font-size:28px !important; font-weight:700; text-align:center; padding:14px !important;}
+
+  .cat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:8px;}
+  .cat-chip{
+    display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 4px; border-radius:12px;
+    border:2px solid var(--border); background:#fff; font-family:inherit;
+  }
+  .cat-chip.selected{border-color:var(--primary); background:#f0fdfa;}
+  .cat-chip .emoji{font-size:20px;}
+  .cat-chip .name{font-size:10px; color:var(--text-dim); text-align:center; line-height:1.2;}
+
+  .btn{width:100%; padding:14px; border:none; border-radius:12px; font-size:16px; font-weight:600; font-family:inherit;}
+  .btn-primary{background:var(--primary); color:#fff;}
+  .btn-outline{background:#fff; border:1px solid var(--border); color:var(--text);}
+  .btn-danger{background:#fef2f2; color:var(--expense);}
+  .btn-row{display:flex; gap:10px; margin-top:6px;}
+  .btn-row .btn{flex:1;}
+
+  .receipt-upload-btn{
+    display:flex; align-items:center; justify-content:center; gap:8px; padding:12px; border:2px dashed var(--border);
+    border-radius:12px; color:var(--text-dim); font-size:13px; margin-bottom:14px; background:#fafafa;
+  }
+  .receipt-preview{width:100%; border-radius:10px; margin-bottom:12px; max-height:180px; object-fit:cover;}
+  .ocr-badge{display:inline-flex; align-items:center; gap:4px; font-size:11px; background:#f0fdfa; color:var(--primary); padding:3px 8px; border-radius:20px; margin-bottom:10px;}
+
+  .settings-row{display:flex; justify-content:space-between; align-items:center; padding:12px 0; border-bottom:1px solid var(--border);}
+  .settings-row:last-child{border-bottom:none;}
+  .settings-row .label{font-size:14px;}
+  .settings-row select{border:none; background:none; font-family:inherit; font-size:14px; color:var(--primary); font-weight:600;}
+
+  .cat-manage-item{display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);}
+  .cat-manage-item .emoji{font-size:20px; width:30px; text-align:center;}
+  .cat-manage-item .name{flex:1; font-size:14px;}
+  .cat-manage-item button{background:none; border:none; color:var(--text-dim); font-size:16px; padding:4px 8px;}
+
+  .toast{
+    position:fixed; bottom:calc(90px + var(--safe-bottom)); left:50%; transform:translateX(-50%);
+    background:#1e293b; color:#fff; padding:10px 18px; border-radius:30px; font-size:13px; z-index:100;
+    animation:toastIn .2s ease;
+  }
+  @keyframes toastIn{from{opacity:0; transform:translateX(-50%) translateY(10px);} to{opacity:1; transform:translateX(-50%) translateY(0);}}
+
+  .spinner{width:18px; height:18px; border:2px solid rgba(255,255,255,.4); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; display:inline-block;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <h1 id="greeting">รายรับ-รายจ่าย</h1>
+  <div class="month-nav">
+    <button id="prevMonth">‹</button>
+    <div class="month-label" id="monthLabel">—</div>
+    <button id="nextMonth">›</button>
+  </div>
+  <div class="balance">
+    <div class="amount" id="balanceAmount">฿0.00</div>
+    <div class="label">คงเหลือเดือนนี้</div>
+  </div>
+  <div class="io-row">
+    <div class="io-item"><span class="dot income"></span><span id="totalIncome">฿0</span></div>
+    <div class="io-item"><span class="dot expense"></span><span id="totalExpense">฿0</span></div>
+  </div>
+</header>
+
+<main>
+
+  <!-- TAB: Dashboard -->
+  <section id="tab-dashboard">
+    <div class="card">
+      <h2>สรุปตามหมวดหมู่</h2>
+      <div class="chart-wrap"><canvas id="categoryChart"></canvas></div>
+      <div class="cat-legend" id="catLegend"></div>
+    </div>
+    <div class="card">
+      <h2>รายการล่าสุด</h2>
+      <div id="recentList"></div>
+    </div>
+  </section>
+
+  <!-- TAB: Transactions -->
+  <section id="tab-transactions" class="hidden">
+    <div class="card">
+      <h2>รายการทั้งหมด</h2>
+      <div id="txList"></div>
+    </div>
+  </section>
+
+  <!-- TAB: Categories -->
+  <section id="tab-categories" class="hidden">
+    <div class="card">
+      <h2>รายรับ</h2>
+      <div id="catListIncome"></div>
+      <button class="btn btn-outline" style="margin-top:10px" onclick="openCategorySheet('income')">+ เพิ่มหมวดรายรับ</button>
+    </div>
+    <div class="card">
+      <h2>รายจ่าย</h2>
+      <div id="catListExpense"></div>
+      <button class="btn btn-outline" style="margin-top:10px" onclick="openCategorySheet('expense')">+ เพิ่มหมวดรายจ่าย</button>
+    </div>
+  </section>
+
+  <!-- TAB: Settings -->
+  <section id="tab-settings" class="hidden">
+    <div class="card">
+      <h2>ตั้งค่า</h2>
+      <div class="settings-row">
+        <div class="label">สกุลเงิน</div>
+        <select id="currencySelect">
+          <option value="THB">บาท (THB)</option>
+          <option value="USD">USD</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <div class="label">วันเริ่มต้นเดือน</div>
+        <select id="startOfMonthSelect">
+          <option value="1">วันที่ 1</option>
+          <option value="25">วันที่ 25</option>
+        </select>
+      </div>
+    </div>
+    <div class="card">
+      <h2>ข้อมูล</h2>
+      <button class="btn btn-outline" onclick="exportCSV()">⬇ Export CSV</button>
+    </div>
+  </section>
+
+</main>
+
+<button class="fab" onclick="openTxSheet()">+</button>
+
+<nav class="tabbar">
+  <button class="tab-btn active" data-tab="dashboard"><span class="icon">🏠</span>หน้าหลัก</button>
+  <button class="tab-btn" data-tab="transactions"><span class="icon">📋</span>รายการ</button>
+  <button class="tab-btn" data-tab="categories"><span class="icon">🏷️</span>หมวดหมู่</button>
+  <button class="tab-btn" data-tab="settings"><span class="icon">⚙️</span>ตั้งค่า</button>
+</nav>
+
+<!-- ===== Add/Edit Transaction Sheet ===== -->
+<div class="sheet-overlay hidden" id="txSheetOverlay">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h3 id="txSheetTitle">เพิ่มรายการ</h3>
+
+    <label class="receipt-upload-btn" for="receiptInput" id="receiptUploadLabel">
+      <span id="receiptUploadText">📷 อัปโหลดสลิป (ให้ AI อ่านให้)</span>
+    </label>
+    <input type="file" id="receiptInput" accept="image/*" capture="environment" class="hidden">
+    <img id="receiptPreview" class="receipt-preview hidden">
+    <div id="ocrBadge" class="ocr-badge hidden">✓ อ่านจากสลิป — ตรวจสอบก่อนบันทึก</div>
+
+    <div class="type-toggle">
+      <button type="button" id="typeExpenseBtn" class="active expense" onclick="setTxType('expense')">รายจ่าย</button>
+      <button type="button" id="typeIncomeBtn" class="income" onclick="setTxType('income')">รายรับ</button>
+    </div>
+
+    <div class="field">
+      <label>จำนวนเงิน</label>
+      <input type="number" inputmode="decimal" id="txAmount" class="amount-input" placeholder="0.00" step="0.01">
+    </div>
+
+    <div class="field">
+      <label>หมวดหมู่</label>
+      <div class="cat-grid" id="txCatGrid"></div>
+    </div>
+
+    <div class="field">
+      <label>วันที่</label>
+      <input type="date" id="txDate">
+    </div>
+
+    <div class="field">
+      <label>หมายเหตุ</label>
+      <input type="text" id="txNote" placeholder="เช่น ค่าข้าวเที่ยง">
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-danger hidden" id="txDeleteBtn" onclick="deleteCurrentTx()">ลบ</button>
+      <button class="btn btn-outline" onclick="closeTxSheet()">ยกเลิก</button>
+      <button class="btn btn-primary" id="txSaveBtn" onclick="saveTx()">บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Category Sheet ===== -->
+<div class="sheet-overlay hidden" id="catSheetOverlay">
+  <div class="sheet">
+    <div class="sheet-handle"></div>
+    <h3 id="catSheetTitle">เพิ่มหมวดหมู่</h3>
+    <div class="field">
+      <label>ไอคอน (emoji)</label>
+      <input type="text" id="catEmoji" placeholder="🍜" maxlength="4">
+    </div>
+    <div class="field">
+      <label>ชื่อหมวดหมู่</label>
+      <input type="text" id="catName" placeholder="เช่น อาหาร">
+    </div>
+    <div class="field">
+      <label>สี</label>
+      <input type="color" id="catColor" value="#64748b" style="height:44px; padding:4px;">
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-danger hidden" id="catDeleteBtn" onclick="deleteCurrentCat()">ลบ</button>
+      <button class="btn btn-outline" onclick="closeCategorySheet()">ยกเลิก</button>
+      <button class="btn btn-primary" onclick="saveCategory()">บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============ CONFIG ============ */
+const SUPABASE_URL = 'https://yfojjrvcgmkqvcpbvhdi.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_ozbTIla8aefRUj9APNMRGQ_Q3Sg1GTl';
+const PARSE_RECEIPT_URL = `${SUPABASE_URL}/functions/v1/parse-receipt`;
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+/* ============ STATE ============ */
+const CACHE_KEY = 'expense_tracker_cache_v1';
+let state = {
+  transactions: [],
+  categories: [],
+  settings: { currency: 'THB', start_of_month: '1' },
+};
+let currentMonth = new Date(); // ใช้กำหนด เดือน/ปี ที่กำลังดู
+let activeTab = 'dashboard';
+let categoryChart = null;
+
+let txEditingId = null;   // null = กำลังเพิ่มใหม่
+let txType = 'expense';
+let txSelectedCategoryId = null;
+let txReceiptUrl = null;  // url รูปสลิปที่อัปโหลดแล้ว (ถ้ามี)
+
+let catEditingId = null;
+let catEditingType = 'expense';
+
+/* ============ UTIL ============ */
+function satangToDisplay(satang){
+  return (satang/100).toLocaleString('th-TH', {minimumFractionDigits:2, maximumFractionDigits:2});
+}
+function fmtMoney(satang, withSign){
+  const v = satangToDisplay(Math.abs(satang));
+  return (withSign && satang < 0 ? '-' : '') + '฿' + v;
+}
+function toSatang(bahtStr){
+  const n = parseFloat(bahtStr);
+  if (isNaN(n)) return 0;
+  return Math.round(n * 100);
+}
+function todayStr(){
+  const d = new Date();
+  return d.toISOString().slice(0,10);
+}
+function monthKey(date){
+  return date.getFullYear() + '-' + String(date.getMonth()+1).padStart(2,'0');
+}
+function thaiMonthLabel(date){
+  const months = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+  return months[date.getMonth()] + ' ' + (date.getFullYear()+543);
+}
+function showToast(msg){
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 2200);
+}
+function saveCacheToLocal(){
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify(state)); }catch(e){}
+}
+function loadCacheFromLocal(){
+  try{
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (raw) state = JSON.parse(raw);
+  }catch(e){}
+}
+
+/* ============ DATA LOADING (stale-while-revalidate) ============ */
+async function init(){
+  loadCacheFromLocal();
+  renderAll(); // render จาก cache ทันที (ถ้ามี) ให้รู้สึกเร็ว
+
+  document.getElementById('txDate').value = todayStr();
+
+  await syncFromServer();
+  renderAll();
+
+  bindEvents();
+  registerServiceWorker();
+}
+
+async function syncFromServer(){
+  try{
+    const [catRes, txRes, setRes] = await Promise.all([
+      sb.from('categories').select('*').order('created_at'),
+      sb.from('transactions').select('*').order('date', {ascending:false}),
+      sb.from('settings').select('*'),
+    ]);
+    if (catRes.error) throw catRes.error;
+    if (txRes.error) throw txRes.error;
+    if (setRes.error) throw setRes.error;
+
+    state.categories = catRes.data;
+    state.transactions = txRes.data;
+    const settingsObj = {};
+    setRes.data.forEach(s => settingsObj[s.key] = s.value);
+    state.settings = settingsObj;
+
+    saveCacheToLocal();
+  }catch(err){
+    console.error('sync error', err);
+    showToast('ซิงก์ข้อมูลไม่สำเร็จ (ใช้ข้อมูลล่าสุดที่มี)');
+  }
+}
+
+/* ============ TAB NAV ============ */
+function bindEvents(){
+  document.querySelectorAll('.tab-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=> switchTab(btn.dataset.tab));
+  });
+  document.getElementById('prevMonth').addEventListener('click', ()=>{
+    currentMonth.setMonth(currentMonth.getMonth()-1);
+    renderAll();
+  });
+  document.getElementById('nextMonth').addEventListener('click', ()=>{
+    currentMonth.setMonth(currentMonth.getMonth()+1);
+    renderAll();
+  });
+  document.getElementById('receiptInput').addEventListener('change', handleReceiptUpload);
+  document.getElementById('currencySelect').addEventListener('change', (e)=> updateSetting('currency', e.target.value));
+  document.getElementById('startOfMonthSelect').addEventListener('change', (e)=> updateSetting('start_of_month', e.target.value));
+}
+
+function switchTab(tab){
+  activeTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b=> b.classList.toggle('active', b.dataset.tab===tab));
+  ['dashboard','transactions','categories','settings'].forEach(t=>{
+    document.getElementById('tab-'+t).classList.toggle('hidden', t!==tab);
+  });
+  renderAll();
+}
+
+/* ============ RENDER ============ */
+function getMonthTransactions(){
+  const mk = monthKey(currentMonth);
+  return state.transactions.filter(t => t.date.slice(0,7) === mk);
+}
+
+function categoryById(id){
+  return state.categories.find(c => c.id === id);
+}
+
+function renderAll(){
+  document.getElementById('monthLabel').textContent = thaiMonthLabel(currentMonth);
+
+  const monthTx = getMonthTransactions();
+  const income = monthTx.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const expense = monthTx.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const balance = income - expense;
+
+  document.getElementById('balanceAmount').textContent = fmtMoney(balance, true);
+  document.getElementById('totalIncome').textContent = fmtMoney(income);
+  document.getElementById('totalExpense').textContent = fmtMoney(expense);
+
+  if (activeTab === 'dashboard'){
+    renderCategoryChart(monthTx);
+    renderRecentList(monthTx);
+  } else if (activeTab === 'transactions'){
+    renderFullTxList(monthTx);
+  } else if (activeTab === 'categories'){
+    renderCategoryLists();
+  } else if (activeTab === 'settings'){
+    renderSettingsUI();
+  }
+}
+
+function renderCategoryChart(monthTx){
+  const expenseTx = monthTx.filter(t=>t.type==='expense');
+  const byCategory = {};
+  expenseTx.forEach(t=>{
+    byCategory[t.category_id] = (byCategory[t.category_id]||0) + t.amount;
+  });
+  const entries = Object.entries(byCategory).sort((a,b)=>b[1]-a[1]);
+
+  const ctx = document.getElementById('categoryChart');
+  const legend = document.getElementById('catLegend');
+
+  if (entries.length === 0){
+    if (categoryChart) { categoryChart.destroy(); categoryChart = null; }
+    legend.innerHTML = '<div class="empty-state" style="padding:10px"><div class="emoji">📊</div>ยังไม่มีรายจ่ายเดือนนี้</div>';
+    return;
+  }
+
+  const labels = entries.map(([id])=> categoryById(id)?.name || 'อื่นๆ');
+  const colors = entries.map(([id])=> categoryById(id)?.color || '#64748b');
+  const data = entries.map(([,amt])=> amt/100);
+
+  if (categoryChart) categoryChart.destroy();
+  categoryChart = new Chart(ctx, {
+    type:'doughnut',
+    data:{ labels, datasets:[{ data, backgroundColor: colors, borderWidth:2, borderColor:'#fff' }] },
+    options:{
+      cutout:'65%',
+      plugins:{ legend:{display:false} },
+    }
+  });
+
+  legend.innerHTML = entries.map(([id, amt])=>{
+    const cat = categoryById(id);
+    return `<div class="cat-legend-item"><span class="dot" style="background:${cat?.color||'#64748b'}"></span>${cat?.icon||''} ${cat?.name||'อื่นๆ'} · ${fmtMoney(amt)}</div>`;
+  }).join('');
+}
+
+function txItemHTML(t){
+  const cat = categoryById(t.category_id);
+  const d = new Date(t.date);
+  const dayLabel = d.toLocaleDateString('th-TH', {day:'numeric', month:'short'});
+  return `
+    <div class="tx-item" onclick="openTxSheet('${t.id}')">
+      <div class="tx-icon" style="background:${cat?.color||'#64748b'}22">${cat?.icon||'📦'}</div>
+      <div class="tx-main">
+        <div class="tx-cat">${cat?.name||'ไม่ระบุหมวด'}</div>
+        <div class="tx-note">${t.note ? t.note : dayLabel}</div>
+      </div>
+      <div class="tx-amount ${t.type}">${t.type==='income'?'+':'-'}${fmtMoney(t.amount)}</div>
+    </div>`;
+}
+
+function renderRecentList(monthTx){
+  const el = document.getElementById('recentList');
+  if (monthTx.length === 0){
+    el.innerHTML = '<div class="empty-state"><div class="emoji">🧾</div>ยังไม่มีรายการเดือนนี้<br>แตะปุ่ม + เพื่อเริ่มบันทึก</div>';
+    return;
+  }
+  el.innerHTML = monthTx.slice(0,8).map(txItemHTML).join('');
+}
+
+function renderFullTxList(monthTx){
+  const el = document.getElementById('txList');
+  if (monthTx.length === 0){
+    el.innerHTML = '<div class="empty-state"><div class="emoji">🧾</div>ยังไม่มีรายการเดือนนี้</div>';
+    return;
+  }
+  // จัดกลุ่มตามวันที่
+  const groups = {};
+  monthTx.forEach(t=>{
+    (groups[t.date] = groups[t.date] || []).push(t);
+  });
+  const dates = Object.keys(groups).sort().reverse();
+  el.innerHTML = dates.map(date=>{
+    const d = new Date(date);
+    const label = d.toLocaleDateString('th-TH', {weekday:'short', day:'numeric', month:'short'});
+    return `<div class="tx-date-group">${label}</div>` + groups[date].map(txItemHTML).join('');
+  }).join('');
+}
+
+function renderCategoryLists(){
+  const income = state.categories.filter(c=>c.type==='income');
+  const expense = state.categories.filter(c=>c.type==='expense');
+  const row = (c) => `
+    <div class="cat-manage-item">
+      <div class="emoji">${c.icon}</div>
+      <div class="name">${c.name}</div>
+      <button onclick="openCategorySheet('${c.type}','${c.id}')">แก้ไข</button>
+    </div>`;
+  document.getElementById('catListIncome').innerHTML = income.map(row).join('') || '<div class="empty-state" style="padding:14px">ยังไม่มีหมวดรายรับ</div>';
+  document.getElementById('catListExpense').innerHTML = expense.map(row).join('') || '<div class="empty-state" style="padding:14px">ยังไม่มีหมวดรายจ่าย</div>';
+}
+
+function renderSettingsUI(){
+  document.getElementById('currencySelect').value = state.settings.currency || 'THB';
+  document.getElementById('startOfMonthSelect').value = state.settings.start_of_month || '1';
+}
+
+/* ============ TRANSACTION SHEET ============ */
+function setTxType(type){
+  txType = type;
+  document.getElementById('typeExpenseBtn').classList.toggle('active', type==='expense');
+  document.getElementById('typeIncomeBtn').classList.toggle('active', type==='income');
+  txSelectedCategoryId = null;
+  renderTxCatGrid();
+}
+
+function renderTxCatGrid(){
+  const cats = state.categories.filter(c=>c.type===txType);
+  const grid = document.getElementById('txCatGrid');
+  grid.innerHTML = cats.map(c=>`
+    <button type="button" class="cat-chip ${c.id===txSelectedCategoryId?'selected':''}" onclick="selectTxCategory('${c.id}')">
+      <span class="emoji">${c.icon}</span>
+      <span class="name">${c.name}</span>
+    </button>`).join('');
+}
+function selectTxCategory(id){
+  txSelectedCategoryId = id;
+  renderTxCatGrid();
+}
+
+function openTxSheet(txId){
+  txEditingId = txId || null;
+  txReceiptUrl = null;
+  document.getElementById('receiptPreview').classList.add('hidden');
+  document.getElementById('ocrBadge').classList.add('hidden');
+  document.getElementById('receiptUploadText').textContent = '📷 อัปโหลดสลิป (ให้ AI อ่านให้)';
+
+  if (txId){
+    const t = state.transactions.find(x=>x.id===txId);
+    document.getElementById('txSheetTitle').textContent = 'แก้ไขรายการ';
+    document.getElementById('txDeleteBtn').classList.remove('hidden');
+    document.getElementById('txAmount').value = (t.amount/100).toFixed(2);
+    document.getElementById('txDate').value = t.date;
+    document.getElementById('txNote').value = t.note || '';
+    txType = t.type;
+    txSelectedCategoryId = t.category_id;
+    txReceiptUrl = t.receipt_url || null;
+    if (txReceiptUrl){
+      document.getElementById('receiptPreview').src = txReceiptUrl;
+      document.getElementById('receiptPreview').classList.remove('hidden');
+    }
+  } else {
+    document.getElementById('txSheetTitle').textContent = 'เพิ่มรายการ';
+    document.getElementById('txDeleteBtn').classList.add('hidden');
+    document.getElementById('txAmount').value = '';
+    document.getElementById('txDate').value = todayStr();
+    document.getElementById('txNote').value = '';
+    txType = 'expense';
+    txSelectedCategoryId = null;
+  }
+  document.getElementById('typeExpenseBtn').classList.toggle('active', txType==='expense');
+  document.getElementById('typeIncomeBtn').classList.toggle('active', txType==='income');
+  renderTxCatGrid();
+  document.getElementById('txSheetOverlay').classList.remove('hidden');
+}
+function closeTxSheet(){
+  document.getElementById('txSheetOverlay').classList.add('hidden');
+}
+
+async function saveTx(){
+  const amountSatang = toSatang(document.getElementById('txAmount').value);
+  const date = document.getElementById('txDate').value;
+  const note = document.getElementById('txNote').value.trim();
+
+  if (amountSatang <= 0){ showToast('กรอกจำนวนเงินให้ถูกต้อง'); return; }
+  if (!txSelectedCategoryId){ showToast('เลือกหมวดหมู่ก่อน'); return; }
+  if (!date){ showToast('เลือกวันที่'); return; }
+
+  const payload = {
+    type: txType,
+    category_id: txSelectedCategoryId,
+    amount: amountSatang,
+    date,
+    note: note || null,
+    receipt_url: txReceiptUrl,
+  };
+
+  const btn = document.getElementById('txSaveBtn');
+  btn.disabled = true; btn.textContent = 'กำลังบันทึก...';
+
+  try{
+    if (txEditingId){
+      const {error} = await sb.from('transactions').update(payload).eq('id', txEditingId);
+      if (error) throw error;
+    } else {
+      const {error} = await sb.from('transactions').insert(payload);
+      if (error) throw error;
+    }
+    await syncFromServer();
+    renderAll();
+    closeTxSheet();
+    showToast('บันทึกแล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง');
+  }finally{
+    btn.disabled = false; btn.textContent = 'บันทึก';
+  }
+}
+
+async function deleteCurrentTx(){
+  if (!txEditingId) return;
+  if (!confirm('ลบรายการนี้?')) return;
+  try{
+    const {error} = await sb.from('transactions').delete().eq('id', txEditingId);
+    if (error) throw error;
+    await syncFromServer();
+    renderAll();
+    closeTxSheet();
+    showToast('ลบแล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('ลบไม่สำเร็จ');
+  }
+}
+
+/* ============ RECEIPT OCR ============ */
+function fileToBase64(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleReceiptUpload(e){
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const previewUrl = URL.createObjectURL(file);
+  document.getElementById('receiptPreview').src = previewUrl;
+  document.getElementById('receiptPreview').classList.remove('hidden');
+  document.getElementById('receiptUploadText').innerHTML = '<span class="spinner" style="border-color:rgba(15,118,110,.3); border-top-color:var(--primary)"></span> กำลังอ่านสลิป...';
+
+  try{
+    const base64 = await fileToBase64(file);
+
+    // อ่านข้อมูลด้วย AI พร้อมกับอัปโหลดไฟล์ขึ้น Storage
+    const ext = file.name.split('.').pop() || 'jpg';
+    const path = `receipt_${Date.now()}.${ext}`;
+
+    const [parseRes, uploadRes] = await Promise.all([
+      fetch(PARSE_RECEIPT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'apikey': SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify({ image_base64: base64, mime_type: file.type }),
+      }).then(r=>r.json()),
+      sb.storage.from('receipts').upload(path, file),
+    ]);
+
+    if (parseRes.error) throw new Error(parseRes.error);
+    if (uploadRes.error) throw uploadRes.error;
+
+    const { data: urlData } = sb.storage.from('receipts').getPublicUrl(path);
+    txReceiptUrl = urlData.publicUrl;
+
+    // เติมฟอร์มจากผลลัพธ์ AI ให้ user ตรวจสอบก่อนบันทึก
+    if (parseRes.amount > 0){
+      document.getElementById('txAmount').value = parseRes.amount.toFixed(2);
+    }
+    if (parseRes.date){
+      document.getElementById('txDate').value = parseRes.date;
+    }
+    if (parseRes.note === undefined && parseRes.merchant){
+      document.getElementById('txNote').value = parseRes.merchant;
+    }
+    if (parseRes.type){
+      setTxType(parseRes.type);
+    }
+    if (parseRes.category_id && state.categories.find(c=>c.id===parseRes.category_id)){
+      txSelectedCategoryId = parseRes.category_id;
+      renderTxCatGrid();
+    }
+
+    document.getElementById('receiptUploadText').textContent = '📷 เปลี่ยนรูปสลิป';
+    document.getElementById('ocrBadge').classList.remove('hidden');
+    const confPct = Math.round((parseRes.confidence||0)*100);
+    document.getElementById('ocrBadge').textContent = `✓ อ่านจากสลิป (ความมั่นใจ ${confPct}%) — ตรวจสอบก่อนบันทึก`;
+  }catch(err){
+    console.error(err);
+    showToast('อ่านสลิปไม่สำเร็จ กรอกข้อมูลเองได้เลย');
+    document.getElementById('receiptUploadText').textContent = '📷 ลองอัปโหลดใหม่';
+  }
+}
+
+/* ============ CATEGORY SHEET ============ */
+function openCategorySheet(type, catId){
+  catEditingType = type;
+  catEditingId = catId || null;
+  if (catId){
+    const c = state.categories.find(x=>x.id===catId);
+    document.getElementById('catSheetTitle').textContent = 'แก้ไขหมวดหมู่';
+    document.getElementById('catEmoji').value = c.icon;
+    document.getElementById('catName').value = c.name;
+    document.getElementById('catColor').value = c.color;
+    document.getElementById('catDeleteBtn').classList.remove('hidden');
+  } else {
+    document.getElementById('catSheetTitle').textContent = 'เพิ่มหมวดหมู่';
+    document.getElementById('catEmoji').value = '';
+    document.getElementById('catName').value = '';
+    document.getElementById('catColor').value = '#64748b';
+    document.getElementById('catDeleteBtn').classList.add('hidden');
+  }
+  document.getElementById('catSheetOverlay').classList.remove('hidden');
+}
+function closeCategorySheet(){
+  document.getElementById('catSheetOverlay').classList.add('hidden');
+}
+
+async function saveCategory(){
+  const icon = document.getElementById('catEmoji').value.trim() || '📦';
+  const name = document.getElementById('catName').value.trim();
+  const color = document.getElementById('catColor').value;
+  if (!name){ showToast('กรอกชื่อหมวดหมู่'); return; }
+
+  const payload = { name, icon, color, type: catEditingType };
+  try{
+    if (catEditingId){
+      const {error} = await sb.from('categories').update(payload).eq('id', catEditingId);
+      if (error) throw error;
+    } else {
+      const {error} = await sb.from('categories').insert(payload);
+      if (error) throw error;
+    }
+    await syncFromServer();
+    renderAll();
+    closeCategorySheet();
+    showToast('บันทึกแล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('บันทึกไม่สำเร็จ');
+  }
+}
+
+async function deleteCurrentCat(){
+  if (!catEditingId) return;
+  const used = state.transactions.some(t=>t.category_id===catEditingId);
+  if (used){
+    showToast('ลบไม่ได้ เพราะมีรายการที่ใช้หมวดนี้อยู่');
+    return;
+  }
+  if (!confirm('ลบหมวดหมู่นี้?')) return;
+  try{
+    const {error} = await sb.from('categories').delete().eq('id', catEditingId);
+    if (error) throw error;
+    await syncFromServer();
+    renderAll();
+    closeCategorySheet();
+    showToast('ลบแล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('ลบไม่สำเร็จ');
+  }
+}
+
+/* ============ SETTINGS ============ */
+async function updateSetting(key, value){
+  try{
+    const {error} = await sb.from('settings').upsert({key, value});
+    if (error) throw error;
+    state.settings[key] = value;
+    saveCacheToLocal();
+    showToast('บันทึกการตั้งค่าแล้ว');
+  }catch(err){
+    console.error(err);
+    showToast('บันทึกการตั้งค่าไม่สำเร็จ');
+  }
+}
+
+/* ============ EXPORT CSV ============ */
+function exportCSV(){
+  const rows = [['วันที่','ประเภท','หมวดหมู่','จำนวนเงิน','หมายเหตุ']];
+  state.transactions.slice().sort((a,b)=> a.date.localeCompare(b.date)).forEach(t=>{
+    const cat = categoryById(t.category_id);
+    rows.push([
+      t.date,
+      t.type === 'income' ? 'รายรับ' : 'รายจ่าย',
+      cat?.name || '',
+      (t.amount/100).toFixed(2),
+      t.note || '',
+    ]);
+  });
+  const csv = '﻿' + rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `expense-tracker-${todayStr()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ============ PWA ============ */
+function registerServiceWorker(){
+  if ('serviceWorker' in navigator){
+    navigator.serviceWorker.register('sw.js').catch(err=>console.error('SW register failed', err));
+  }
+}
+
+init();
+</script>
+</body>
+</html>
